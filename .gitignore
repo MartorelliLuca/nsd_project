@@ -1,0 +1,17 @@
+build/
+*.o
+*.a
+*.so
+*.out
+*.bin
+*.log
+
+*.bpf.o
+*.skel.h
+vmlinux.h
+
+.vscode/
+.idea/
+.DS_Store
+
+tmp/
