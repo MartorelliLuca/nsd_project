@@ -2,9 +2,9 @@
 set -eu
 
 # WAN: link CE2 <-> R102
-WAN_IP="10.0.2.2/30"      # indirizzo di CE2 su eth0
+WAN_IP="10.1.2.2/30"      # indirizzo di CE2 su eth0
 WAN_DEV="eth0"
-WAN_GW="10.0.2.1"         # next-hop: R102
+WAN_GW="10.1.2.1"         # next-hop: R102
 
 # LAN fisica verso ebpf-1 (switch/bridge)
 LAN_DEV="eth1"

@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-WAN_IP="10.0.3.2/30"       # CE3 lato R103
+WAN_IP="10.1.3.2/30"       # CE3 lato R103
 WAN_DEV="eth0"
-WAN_GW="10.0.3.1"          # R103
+WAN_GW="10.1.3.1"          # R103
 
 LAN_IP="192.168.3.1/24"    # gateway LAN Site 3
 LAN_DEV="eth1"
