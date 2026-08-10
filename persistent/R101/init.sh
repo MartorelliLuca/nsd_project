@@ -25,6 +25,9 @@ add_ip 10.0.11.5/30 eth1
 # Link R101 <-> CE1 (10.0.1.0/30)
 add_ip 10.1.1.1/30 eth2
 
+add_ip 2.255.0.101/32 lo
+
 bring_up eth0
 bring_up eth1
 bring_up eth2
+bring_up lo
