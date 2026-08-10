@@ -23,8 +23,12 @@ add_ip 10.0.11.6/30 eth0
 add_ip 10.0.11.9/30 eth1
 
 # Link R102 <-> CE2 (10.0.2.0/30)
-add_ip 10.0.2.1/30 eth2
+add_ip 10.1.3.1/30 eth2
+
+# Loopback /32 (R102 router‑ID)
+add_ip 2.255.0.102/32 lo
 
 bring_up eth0
 bring_up eth1
 bring_up eth2
+bring_up lo

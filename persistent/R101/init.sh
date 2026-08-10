@@ -17,13 +17,13 @@ bring_up() {
 }
 
 # Link R101 <-> R103 (10.0.11.0/30)
-add_ip 10.0.11.1/30 eth1
+add_ip 10.0.11.1/30 eth0
 
 # Link R101 <-> R102 (10.0.11.4/30)
-add_ip 10.0.11.5/30 eth0
+add_ip 10.0.11.5/30 eth1
 
 # Link R101 <-> CE1 (10.0.1.0/30)
-add_ip 10.0.1.1/30 eth2
+add_ip 10.1.1.1/30 eth2
 
 bring_up eth0
 bring_up eth1

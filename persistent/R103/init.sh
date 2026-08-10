@@ -23,7 +23,7 @@ add_ip 10.0.11.2/30 eth0
 add_ip 10.0.11.10/30 eth1
 
 # Link R103 <-> CE3 (10.0.3.0/30)
-add_ip 10.0.3.1/30 eth2
+add_ip 10.1.2.1/30 eth2
 
 bring_up eth0
 bring_up eth1
