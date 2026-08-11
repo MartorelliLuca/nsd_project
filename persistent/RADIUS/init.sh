@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CLIENT_IP="192.168.3.10/24"
+CLIENT_IP="192.168.3.2/24"
 IF_DEV="eth0"
 GW_IP="192.168.3.1"   # CE3
 
