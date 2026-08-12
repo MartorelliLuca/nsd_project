@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CLIENT_IP="192.168.95.10/24"
+CLIENT_IP="192.168.95.2/24"
 IF_DEV="eth0"
 GW_IP="192.168.95.1"    # CE2 VLAN95
 

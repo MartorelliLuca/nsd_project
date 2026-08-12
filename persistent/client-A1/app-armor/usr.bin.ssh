@@ -1,51 +1,36 @@
-# AppArmor profile per il client SSH (/usr/bin/ssh)
-
 #include <tunables/global>
 
 profile /usr/bin/ssh flags=(attach_disconnected) {
-
-  # ---- Esecuzione e librerie ----
   /usr/bin/ssh mr,
-  /{lib,lib64,usr/lib}/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /usr/lib/** mr,
   /etc/ld.so.{cache,preload} r,
   /etc/localtime r,
+  /etc/ssl/openssl.cnf r,
+  /etc/passwd r,
+  /etc/group r,
+  /etc/hosts r,
+  /proc/filesystems r,
+  /dev/null rw,
   /sys/devices/system/cpu/online r,
-
-  # ---- Configurazione SSH ----
   /etc/ssh/ssh_config r,
   /etc/ssh/ssh_config.d/** r,
-  owner @{HOME}/.ssh/ r,
-  owner @{HOME}/.ssh/{config,known_hosts} r,
-  owner @{HOME}/.ssh/id_* r,
-
-  # ---- File di sistema (DNS/NSS) ----
-  /etc/{nsswitch,resolv,hosts,passwd,group,hostname,host.conf,services,gai}.conf r,
   /run/systemd/resolve/** r,
 
-  # ---- Device ----
-  /dev/{null,random,urandom} rw,
-  /dev/tty rw,
-  /dev/pts/[0-9]* rw,
-
-  # ---- Network (solo TCP) ----
   network inet stream,
   network inet6 stream,
 
-  # ---- 1 Deny read credential store ----
   deny /etc/{shadow,shadow-,gshadow,gshadow-} r,
   deny /etc/security/** r,
+  
+  deny owner @{HOME}/.ssh/.* rw,
+  
+  deny /etc/** w,
+  
+  deny /tmp/** x,
 
-  # ---- 2 Deny access to SSH keys ----
-  deny owner @{HOME}/.ssh/*.* rwk,
-
-  # ---- 3 Deny write /etc ----
-  deny /etc/** wklmx,
-
-  # ---- 4 Deny exec world-writable ----
-  deny /{tmp,var/tmp}/** mrwxkl,
-  deny owner @{HOME}/{Downloads,.cache}/** mrwxkl,
-
-  # ---- 5 Restrict network ----
-  deny network {raw,packet,dgram},
-
+  deny network inet raw,
+  deny network packet,
+  deny network dgram,
 }

@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-CLIENT_IP="192.168.32.10/24"
+CLIENT_IP="192.168.32.2/24"
 IF_DEV="eth0"
-GW_IP="192.168.32.1"    # CE2 VLAN32
+GW_IP="192.168.32.1"    # CE2
 
 add_ip() {
   ipcidr="$1"

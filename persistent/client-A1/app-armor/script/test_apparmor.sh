@@ -57,7 +57,7 @@ run_allowed "ssh -Q cipher (elenco cipher supportati)" ssh -Q cipher
 
 # Test FORBIDDEN 1: lettura credential store di sistema (/etc/shadow)
 run_forbidden "Tentativo di usare /etc/shadow come file di config" \
-  ssh -F /etc/shadow localhost
+  sudo ssh -F /etc/shadow localhost
 
 # Test FORBIDDEN 2: accesso a materiale sensibile in ~/.ssh (fake_config)
 mkdir -p "$HOME/.ssh"
