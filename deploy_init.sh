@@ -4,7 +4,7 @@ set -eu
 VM_HOST="gns3@192.168.56.101"
 BASE_DIR="persistent"
 
-TARGETS=(R101 R102 R103 CE1 CE2 CE3 client-A1 client-B1 client-B2 RADIUS ebpf-1)
+TARGETS=(R101 R102 R103 CE1 CE2 CE3 client-B1 client-B2 RADIUS ebpf-1)
 
 log() {
   printf '%s\n' "$*" >&2

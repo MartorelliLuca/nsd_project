@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+PROFILE="*/usr.bin.ssh"
+
+echo "[*] Verifica che il profilo esista: $PROFILE"
+if [ ! -f "$PROFILE" ]; then
+  echo "[!] Profilo non trovato: $PROFILE" >&2
+  exit 1
+fi
+
+echo "[*] Parsing e (ri)caricamento del profilo..."
+sudo apparmor_parser -r "$PROFILE"
+
+echo "[*] Imposto il profilo in modalità ENFORCE..."
+sudo aa-enforce "$PROFILE"
+
+echo "[*] Stato profilo:"
+sudo aa-status | grep -E 'ssh|/usr/bin/ssh' || echo "  (profilo non trovato in aa-status)"
+
+echo "[+] Fatto."

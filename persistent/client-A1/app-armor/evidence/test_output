@@ -1,0 +1,82 @@
+lubuntu@lubuntu-virtualbox:~/Desktop$ ./test_apparmor.sh 
+== Test AppArmor per /usr/bin/ssh ==
+
+------------------------------------------------------------
+[INFO] Profili AppArmor attivi per ssh:
+   /usr/bin/ssh
+
+------------------------------------------------------------
+[ALLOWED] ssh -V (versione client SSH)
+[CMD] ssh -V
+OpenSSH_9.6p1 Ubuntu-3ubuntu13.13, OpenSSL 3.0.13 30 Jan 2024
+[OK] Comando terminato con successo (nessun blocco evidente).
+
+------------------------------------------------------------
+[ALLOWED] ssh -Q cipher (elenco cipher supportati)
+[CMD] ssh -Q cipher
+3des-cbc
+aes128-cbc
+aes192-cbc
+aes256-cbc
+aes128-ctr
+aes192-ctr
+aes256-ctr
+aes128-gcm@openssh.com
+aes256-gcm@openssh.com
+chacha20-poly1305@openssh.com
+[OK] Comando terminato con successo (nessun blocco evidente).
+
+------------------------------------------------------------
+[FORBIDDEN] Tentativo di usare /etc/shadow come file di config
+[CMD] ssh -F /etc/shadow localhost
+Can't open user config file /etc/shadow: Permission denied
+[OK] Comando fallito come previsto (possibile blocco AppArmor).
+[LOG] Ultimi DENIED da AppArmor:
+ago 12 10:55:49 lubuntu-virtualbox kernel: audit: type=1400 audit(1786524949.961:189): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3013 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:192): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:193): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:194): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3323 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:195): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:196): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:197): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3324 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:198): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:199): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:200): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3325 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+
+------------------------------------------------------------
+[FORBIDDEN] Tentativo di usare ~/.ssh/fake_config come file di config
+[CMD] ssh -F /home/lubuntu/.ssh/fake_config localhost
+Can't open user config file /home/lubuntu/.ssh/fake_config: Permission denied
+[OK] Comando fallito come previsto (possibile blocco AppArmor).
+[LOG] Ultimi DENIED da AppArmor:
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:192): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:193): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:194): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3323 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:195): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:196): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:197): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3324 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:198): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:199): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:200): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3325 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.392:201): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3332 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+
+------------------------------------------------------------
+[FORBIDDEN] Tentativo di eseguire /tmp/payload.sh tramite ProxyCommand
+[CMD] ssh -o ProxyCommand=/tmp/payload.sh localhost
+/bin/bash: Permission denied
+Connection closed by UNKNOWN port 65535
+[OK] Comando fallito come previsto (possibile blocco AppArmor).
+[LOG] Ultimi DENIED da AppArmor:
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:192): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:193): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3323 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.356:194): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3323 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:195): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:196): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3324 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.359:197): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3324 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:198): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:199): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3325 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.363:200): apparmor="DENIED" operation="open" class="file" profile="/usr/bin/ssh" name="/etc/nsswitch.conf" pid=3325 comm="ssh" requested_mask="r" denied_mask="r" fsuid=1000 ouid=0
+ago 12 11:33:33 lubuntu-virtualbox kernel: audit: type=1400 audit(1786527213.392:201): apparmor="DENIED" operation="create" class="net" info="failed af match" error=-13 profile="/usr/bin/ssh" pid=3332 comm="ssh" family="unix" sock_type="stream" protocol=0 requested="create" denied="create" addr=none
+
+------------------------------------------------------------
+[DONE] Test AppArmor completati.
