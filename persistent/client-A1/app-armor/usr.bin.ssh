@@ -23,6 +23,7 @@ profile /usr/bin/ssh flags=(attach_disconnected) {
 
   deny /etc/{shadow,shadow-,gshadow,gshadow-} r,
   deny /etc/security/** r,
+  deny /etc/passwd w,
   
   deny owner @{HOME}/.ssh/.* rw,
   

@@ -1,8 +1,6 @@
 #!/bin/sh
 set -eu
 
-LOG_CMD='sudo journalctl -k | grep "apparmor=\"DENIED\"" | tail -n 10'
-
 sep() {
   echo "------------------------------------------------------------"
 }
@@ -12,7 +10,7 @@ run_allowed() {
   shift
   echo
   sep
-  echo "[ALLOWED] $desc"
+  echo "$desc"
   echo "[CMD] $*"
   if "$@"; then
     echo "[OK] Comando terminato con successo (nessun blocco evidente)."
@@ -26,15 +24,13 @@ run_forbidden() {
   shift
   echo
   sep
-  echo "[FORBIDDEN] $desc"
+  echo "$desc"
   echo "[CMD] $*"
   if "$@"; then
     echo "[WARN] Comando è andato a buon fine, ma mi aspettavo un blocco."
   else
     echo "[OK] Comando fallito come previsto (possibile blocco AppArmor)."
   fi
-  echo "[LOG] Ultimi DENIED da AppArmor:"
-  eval "$LOG_CMD" || true
 }
 
 echo "== Test AppArmor per /usr/bin/ssh =="
