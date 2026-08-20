@@ -13,57 +13,60 @@ ip link add br0 type bridge vlan_filtering 1
 # Porta up bridge.
 ip link set br0 up
 
-# Puliamo la chain gestita dal bridge,
-# così non accumuliamo regole vecchie ogni volta che eseguiamo l'init.
-ebtables -F
-
-# Impostiamo la policy predefinita di FORWARD a DROP:
-ebtables -P FORWARD DROP 
-
-ebtables -P INPUT ACCEPT    #Accetta il traffico in ingresso verso il bridge.
-ebtables -P OUTPUT ACCEPT   #Accetta il traffico in uscita dal bridge verso le interfacce fisiche.
-
-# Permettiamo sempre il traffico che arriva dall'interfaccia verso il resto della rete (eth0),
-# cioè verso CE2 / AS100: questo evita che la policy DROP blocchi il traffico.
-ebtables -A FORWARD -i eth0 -j ACCEPT 
-
-
 #Porta up tutte le interfacce.
 ip link set eth0 up
 ip link set eth1 up
 ip link set eth2 up
 
 # Collega le porte fisiche al bridge.
-ip link set eth0 master br0 2>/dev/null || true
-ip link set eth1 master br0 2>/dev/null || true
-ip link set eth2 master br0 2>/dev/null || true
+ip link set eth0 master br0
+ip link set eth1 master br0
+ip link set eth2 master br0
 
-# Rimuove la VLAN predefinita 1 dalle porte.
-bridge vlan del dev eth0 vid 1 2>/dev/null || true
-bridge vlan del dev eth1 vid 1 2>/dev/null || true
-bridge vlan del dev eth2 vid 1 2>/dev/null || true
-
-# eth0: trunk, traffico VLAN 32 e VLAN 95 taggato.
-bridge vlan add dev eth0 vid 32 2>/dev/null || true
-bridge vlan add dev eth0 vid 95 2>/dev/null || true
-
-# eth1: porta access non taggata nella VLAN 32.
-bridge vlan add dev eth1 vid 32 pvid untagged 2>/dev/null || true
-
-# eth2: porta access non taggata nella VLAN 95.
-bridge vlan add dev eth2 vid 95 pvid untagged 2>/dev/null || true
 
 # IP del bridge: mantengo quello dello script 2.
-ip addr add 192.168.2.2/24 dev br0 2>/dev/null || true
-
-# Rete 192.168.3.0/24 raggiungibile tramite CE2 nella VLAN 32.
-ip route add 192.168.3.0/24 via 192.168.32.1 dev br0 2>/dev/null || true
+ip addr add 192.168.2.2/24 dev br0
+ip route add default via 192.168.20.1
 
 # Il bridge stesso appartiene alla VLAN 32:
 # può quindi ricevere traffico non taggato associandolo alla VLAN 32.
-bridge vlan add dev br0 vid 32 self pvid untagged 2>/dev/null || true
+bridge vlan add dev br0 vid 32 self pvid untagged 
 
 # Abilita l'inoltro di EAPOL attraverso il bridge.
 echo 8 > "/sys/class/net/br0/bridge/group_fwd_mask"
+
+
+# Puliamo la chain gestita dal bridge,
+# così non accumuliamo regole vecchie ogni volta che eseguiamo l'init.
+ebtables -F
+# Impostiamo la policy predefinita di FORWARD a DROP:
+ebtables -P FORWARD DROP 
+ebtables -P INPUT ACCEPT    #Accetta il traffico in ingresso verso il bridge.
+ebtables -P OUTPUT ACCEPT   #Accetta il traffico in uscita dal bridge verso le interfacce fisiche.
+# Permettiamo sempre il traffico che arriva dall'interfaccia verso il resto della rete (eth0),
+# cioè verso CE2 / AS100: questo evita che la policy DROP blocchi il traffico.
+ebtables -A FORWARD -i eth0 -j ACCEPT 
+
+# Avvia hostapd come authenticator 802.1X wired, se disponibile.
+HOSTAPD_BIN="$(command -v hostapd || true)"
+HOSTAPD_CONF="/root/hostapd/hostapd.conf"
+HOSTAPD_RUN_DIR="/var/run/hostapd"
+
+if [ -z "$HOSTAPD_BIN" ]; then
+    echo "[ebpf-1] Errore: hostapd non è installato o non è nel PATH." >&2
+
+elif pgrep -x hostapd >/dev/null 2>&1; then
+    echo "[ebpf-1] hostapd è già in esecuzione."
+
+elif [ ! -f "$HOSTAPD_CONF" ]; then
+    echo "[ebpf-1] Errore: configurazione non trovata: $HOSTAPD_CONF" >&2
+
+else
+    mkdir -p "$HOSTAPD_RUN_DIR"
+    "$HOSTAPD_BIN" -B "$HOSTAPD_CONF"
+    echo "[ebpf-1] hostapd avviato con $HOSTAPD_CONF."
+fi
+
+echo "[ebpf-1] bridge e VLAN configurati."
 
 
