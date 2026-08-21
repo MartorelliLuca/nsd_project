@@ -14,7 +14,7 @@ node_src_dir() {
   local host="$1"
 
   if [ "$host" = "ebpf-1" ]; then
-    printf '%s\n' "${BASE_DIR}/ebpf"
+    printf '%s\n' "${BASE_DIR}/ebpf-1"
   else
     printf '%s\n' "${BASE_DIR}/${host}"
   fi

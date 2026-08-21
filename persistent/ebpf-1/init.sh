@@ -26,11 +26,11 @@ ip link set eth2 master br0
 
 # IP del bridge: mantengo quello dello script 2.
 ip addr add 192.168.2.2/24 dev br0
-ip route add default via 192.168.20.1
+ip route add default via 192.168.2.1
 
 # Il bridge stesso appartiene alla VLAN 32:
 # può quindi ricevere traffico non taggato associandolo alla VLAN 32.
-bridge vlan add dev br0 vid 32 self pvid untagged 
+bridge vlan add dev br0 vid 32 self pvid untagged 2>/dev/null || true
 
 # Abilita l'inoltro di EAPOL attraverso il bridge.
 echo 8 > "/sys/class/net/br0/bridge/group_fwd_mask"
