@@ -19,7 +19,7 @@ static const char *__doc__ = "XDP loader\n"
 #include "../common/common_params.h"
 #include "../common/common_user_bpf_xdp.h"
 
-static const char *default_filename = "xdp_prog_kern.o";
+static const char *default_filename = "xdp_kernel.o";
 static const char *default_progname = "xdp_radius_parser";
 
 static const struct option_wrapper long_options[] = {

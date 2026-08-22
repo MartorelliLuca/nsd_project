@@ -205,7 +205,7 @@ static __always_inline void radius_commit_accept(struct supplicant_id_key *id,
 /* ------------------------------------------------------------------------- */
 
 SEC("xdp")
-int xdp_radius_parser(struct xdp_md *ctx)
+int xdp_eap_parser(struct xdp_md *ctx)
 {
 	void *data = (void *)(long)ctx->data;
 	void *end = (void *)(long)ctx->data_end;
