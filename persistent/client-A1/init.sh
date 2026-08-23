@@ -2,35 +2,18 @@
 set -eu
 
 CLIENT_IP="192.168.1.2/24"
-IF_DEV="e0"
-GW_IP="192.168.1.1"   # CE1
+IF_DEV="enp0s3"
+GW_IP="192.168.1.1"
 
-add_ip() {
-  ipcidr="$1"
-  dev="$2"
+ip link set lo up
+ip link set "$IF_DEV" up
 
-  if ip -br addr show dev "$dev" 2>/dev/null | grep -qF "$ipcidr"; then
-    :
-  else
-    ip addr add "$ipcidr" dev "$dev"
-  fi
-}
+# Evita IP duplicati o residui da configurazioni precedenti.
+ip addr flush dev "$IF_DEV" scope global
+ip addr add "$CLIENT_IP" dev "$IF_DEV"
 
-bring_up() {
-  dev="$1"
-  ip link set "$dev" up 2>/dev/null || true
-}
+# Rimuove la default route precedente e usa CE1 come gateway.
+ip route del default 2>/dev/null || true
+ip route replace default via "$GW_IP" dev "$IF_DEV"
 
-set_default_route() {
-  gw="$1"
-
-  if ip route show default 2>/dev/null | grep -q "via $gw" >/dev/null 2>&1; then
-    :
-  else
-    ip route add default via "$gw"
-  fi
-}
-
-add_ip "$CLIENT_IP" "$IF_DEV"
-bring_up "$IF_DEV"
-set_default_route "$GW_IP"
+echo "[client-A1] Configurato: $CLIENT_IP su $IF_DEV, gateway $GW_IP"
