@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu
-./deploy_init.sh
-./ebpf.sh
-./run_init_all.sh
-./frr_run.sh
-./openvpn_run.sh
+./scripts/deploy_init.sh
+./scripts/ebpf.sh
+./scripts/run_init_all.sh
+./scripts/frr_run.sh
+./scripts/openvpn_run.sh
