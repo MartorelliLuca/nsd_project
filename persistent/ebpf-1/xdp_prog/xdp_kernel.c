@@ -207,39 +207,36 @@ static __always_inline void radius_commit_accept(struct supplicant_id_key *id,
 SEC("xdp")
 int xdp_radius_parser(struct xdp_md *ctx)
 {
-	void *data = (void *)(long)ctx->data;
-	void *end = (void *)(long)ctx->data_end;
+    void *packet_start = (void *)(long)ctx->data;
+    void *packet_end = (void *)(long)ctx->data_end;
 
-	/* 1) Only parse UDP packets */
-	struct udphdr *udp = extract_udp4(data, end);
-	if (!udp)
-		return XDP_PASS;
+    struct udphdr *udp_hdr = extract_udp4(packet_start, packet_end);
+    if (udp_hdr == NULL || udp_hdr->source != bpf_htons(RADIUS_UDP_PORT))
+        return XDP_PASS;
 
-	/* 2) We only care about RADIUS replies (source port 1812) */
-	if (udp->source != bpf_htons(RADIUS_UDP_PORT))
-		return XDP_PASS;
+    struct radius_packet_hdr *radius_hdr = (void *)(udp_hdr + 1);
+    if (!range_within(radius_hdr, packet_end, sizeof(*radius_hdr)))
+        return XDP_PASS;
 
-	/* 3) RADIUS header right after UDP */
-	struct radius_packet_hdr *radius = (void *)(udp + 1);
-	if (!range_within(radius, end, sizeof(*radius)))
-		return XDP_PASS;
+    if (radius_hdr->code != RADIUS_CODE_ACCESS_ACCEPT)
+        return XDP_PASS;
 
-	/* 4) Only handle Access-Accept */
-	if (radius->code != RADIUS_CODE_ACCESS_ACCEPT)
-		return XDP_PASS;
+    struct supplicant_id_key username = {};
+    __u16 assigned_vlan = 0;
+    int username_length = 0;
 
-	/* 5) Extract (User-Name, VLAN) from TLVs */
-	struct supplicant_id_key id = {};
-	int id_len = 0;
-	__u16 vlan = 0;
+    bool valid_accept = radius_pull_uname_vlan(
+        packet_end,
+        radius_hdr,
+        &username,
+        &username_length,
+        &assigned_vlan
+    );
 
-	if (!radius_pull_uname_vlan(end, radius, &id, &id_len, &vlan))
-		return XDP_PASS;
+    if (valid_accept)
+        radius_commit_accept(&username, assigned_vlan);
 
-	/* 6) Apply decision in auth_map for the MAC previously claiming identity */
-	radius_commit_accept(&id, vlan);
-
-	return XDP_PASS;
+    return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";

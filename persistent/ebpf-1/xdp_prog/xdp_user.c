@@ -27,13 +27,13 @@ struct vlan_mapping {
 };
 
 struct config {
-    char bridge[MAX_IFACE_LEN];
-    char gateway_iface[MAX_IFACE_LEN];
-    char map_path[256];
-    uint64_t interval_ms;
-    struct vlan_mapping vlan_map[MAX_VLAN_MAP];
-    int vlan_map_count;
-    int log_level; // 0=error, 1=warn, 2=info, 3=debug
+    char bridge[MAX_IFACE_LEN];                     //bridge Linux dello switch
+    char gateway_iface[MAX_IFACE_LEN];              //trunk verso CE2
+    char map_path[256];                             //mappa decisioni kernel
+    uint64_t interval_ms;                           //intervallo di polling in ms
+    struct vlan_mapping vlan_map[MAX_VLAN_MAP];     //mappa locale VLAN/porta
+    int vlan_map_count;                             //numero di voci nella mappa
+    int log_level;                                  // log informativi 0=error, 1=warn, 2=info, 3=debug
 };
 
 static struct config cfg;

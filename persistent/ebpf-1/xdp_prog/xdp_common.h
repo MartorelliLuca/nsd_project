@@ -11,11 +11,11 @@
 
 /* Decision stored by radius parser for the userspace enforcer */
 struct station_auth_decision {
-	__u16 assigned_vlan;     
-	__u8 auth_state;        
-	__u8 enforced_flag;     
-	__u32 ingress_port_idx;  
-	__u64 last_update_ns;    
+	__u16 assigned_vlan;     //VLAN assegnata da RADIUS, ad esempio 32 o 95
+	__u8 auth_state;         // 1 = autorizzato, 0 = revocato/non autorizzato
+	__u8 enforced_flag;      // 0 = decisione non ancora applicata; 1 = VLAN ed ebtables già applicati
+	__u32 ingress_port_idx;  // ifindex della porta da cui è arrivato il supplicant
+	__u64 last_update_ns;    // timestamp kernel della decisione
 };
 
 /* Supplicant Identity key */

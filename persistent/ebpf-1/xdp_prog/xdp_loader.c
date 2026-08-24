@@ -128,6 +128,7 @@ int main(int argc, char **argv)
 	}
 
 	/* List available programs */
+	//Qui il loader dice a libxdp: dal file .o già aperto, prendi il programma con questo nome
 	if (verbose)
 		list_avail_progs(obj);
 
@@ -142,15 +143,17 @@ int main(int argc, char **argv)
 		exit(EXIT_FAIL_BPF);
 	}
 
-	/* At this point: BPF-progs are (only) loaded by the kernel, and prog
-	 * is our selected program handle. Next step is attaching this prog
-	 * to a kernel hook point, in this case XDP net_device link-level hook.
-	 */
+	/* Il programma BPF è stato caricato nel kernel.
+	* Ora lo colleghiamo a XDP sull'interfaccia di rete,
+	* identificata da cfg.ifindex in XDP_MODE_NATIVE
+	*/
 	err = xdp_program__attach(prog, cfg.ifindex, cfg.attach_mode, 0);
 	if (err) {
 		perror("xdp_program__attach");
 		exit(err);
 	}
+
+	//Il risultato viene verificato con: bpftool net show
 
 	if (verbose) {
 		printf("Success: Loaded BPF-object(%s) and used program(%s)\n",

@@ -4,204 +4,135 @@
 #include <stdbool.h>
 #include <bpf/bpf_endian.h>
 #include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/in.h>
-#include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 
 #include "xdp_common.h"
 
-#define RADIUS_CODE_ACCESS_ACCEPT 2
-#define RADIUS_ATTR_USER_NAME 1
-#define RADIUS_ATTR_TUNNEL_PGID 81
-#define RADIUS_UDP_PORT 1812
-#define RADIUS_MAX_ATTRS 64
+#define ETHER_TYPE_EAPOL 0x888E
+#define EAPOL_PKT_EAP 0
+#define EAPOL_PKT_LOGOFF 2
 
-#define IDENTITY_TTL_NS (15ULL * 1000000000ULL)
+#define EAP_CODE_RESPONSE 2
+#define EAP_TYPE_IDENTITY 1
 
-struct radius_packet_hdr {
-	__u8 code;
-	__u8 id;
-	__u16 len;
-	__u8 auth[16];
+struct eapol_frame_hdr {
+	__u8 ver, type;
+	__be16 len;
 } __attribute__((packed));
 
-struct radius_tlv_hdr {
-	__u8 type;
-	__u8 len;
+struct eap_msg_hdr {
+	__u8 code, id;
+	__be16 len;
+} __attribute__((packed));
+
+struct eap_identity_type {
+	__u8 type; /* 1 = Identity */
 } __attribute__((packed));
 
 /* ------------------------------------------------------------------------- */
-/* Helper functions                                                          */
+/* Helper functions                                                           */
 /* ------------------------------------------------------------------------- */
 
-/* Extract UDP header from Ethernet+IPv4 frame. */
-static __always_inline struct udphdr *extract_udp4(void *data, void *end)
+
+/* Ensure Ethernet header is present and EtherType is EAPOL */
+static __always_inline struct ethhdr *eth_get_eapol(void *data, void *end)
 {
 	struct ethhdr *eth = data;
 	if (!range_within(eth, end, sizeof(*eth)))
 		return NULL;
 
-	if (eth->h_proto != bpf_htons(ETH_P_IP))
+	if (eth->h_proto != bpf_htons(ETHER_TYPE_EAPOL))
 		return NULL;
 
-	struct iphdr *ip = (void *)(eth + 1);
-	if (!range_within(ip, end, sizeof(*ip)))
-		return NULL;
-
-	if (ip->protocol != IPPROTO_UDP)
-		return NULL;
-
-	/* IP header length sanity (ihl in 32-bit words). */
-	int ihl = ip->ihl * 4;
-	if (ihl < (int)sizeof(*ip) || ihl > 60)
-		return NULL;
-
-	struct udphdr *udp = (void *)((char *)ip + ihl);
-	if (!range_within(udp, end, sizeof(*udp)))
-		return NULL;
-
-	return udp;
+	return eth;
 }
 
-/* Parse decimal VLAN from ASCII attribute value */
-static __always_inline bool parse_vlan_ascii(const char *src, const char *end,
-					     __u16 *out_vlan)
+/* Handle EAPOL-Logoff: mark station as deauthorized in auth_map */
+static __always_inline void process_eapol_logoff(struct ethhdr *eth)
 {
-	__u32 acc = 0;
-	bool got_digit = false;
-
-	/* Read up to 5 ASCII digits (4094 max). */
-	for (int i = 0; i < 5; i++) {
-		const char *p = src + i;
-
-		/* Stop if we cannot safely read one byte. */
-		if (!range_within(p, end, 1)) {
-			break;
-		}
-
-		char c = *p;
-
-		/* Stop on first non-digit. */
-		if (c < '0' || c > '9') {
-			break;
-		}
-
-		got_digit = true;
-
-		/* Convert digit and accumulate. */
-		__u32 digit = (__u32)(c - '0');
-		acc = acc * 10 + digit;
-
-		/* Early stop on overflow beyond allowed VLAN range. */
-		if (acc > 4094) {
-			break;
-		}
+	struct station_auth_decision *dec =
+	    bpf_map_lookup_elem(&auth_map, eth->h_source);
+	if (dec) {
+		dec->auth_state = 0;
+		dec->last_update_ns = bpf_ktime_get_ns();
+		bpf_map_update_elem(&auth_map, eth->h_source, dec, BPF_ANY);
 	}
+}
 
-	/* Must have seen at least one digit and be in [1..4094]. */
-	if (!got_digit) {
+/*
+ * Try to parse an EAP Identity Response:
+ * Returns true if identity extracted into out_id.
+ */
+static __always_inline bool eap_extract_identity_response(
+	void *end, struct eapol_frame_hdr *eol, struct supplicant_id_key *out_id)
+{
+	if (eol->type != EAPOL_PKT_EAP)
 		return false;
-	}
 
-	if (acc < 1 || acc > 4094) {
+	struct eap_msg_hdr *eap = (void *)(eol + 1);
+	if (!range_within(eap, end, sizeof(*eap)))
 		return false;
-	}
 
-	*out_vlan = (__u16)acc;
+	/* Only EAP Response */
+	if (eap->code != EAP_CODE_RESPONSE)
+		return false;
+
+	struct eap_identity_type *eid = (void *)(eap + 1);
+	if (!range_within(eid, end, sizeof(*eid)))
+		return false;
+
+	/* Only Identity type */
+	if (eid->type != EAP_TYPE_IDENTITY)
+		return false;
+
+	__u16 eap_len = bpf_ntohs(eap->len);
+	int id_len = (int)eap_len - (int)sizeof(*eap) - 1;
+	if (id_len <= 0)
+		return false;
+
+	unsigned char *id_ptr = (unsigned char *)(eid + 1);
+
+	/* Bound identity length */
+	id_len = id_len >= ID_MAX ? ID_MAX - 1 : id_len;
+
+	struct supplicant_id_key key = {};
+	bpf_core_read_str(key.identity, id_len + 1, id_ptr);
+
+	*out_id = key;
 	return true;
 }
 
 /*
- * Scan RADIUS attributes and extract:
- *  - User-Name -> supplicant_id_key
- *  - Tunnel-Private-Group-ID -> VLAN
- *
- * Returns true only if both values were found.
+ * Update identity_map
+ * Keep first claimant for 10s to avoid rapid flipping across ports.
  */
-static __always_inline bool radius_pull_uname_vlan(
-	void *end, struct radius_packet_hdr *radius,
-	struct supplicant_id_key *out_id, int *out_id_len, __u16 *out_vlan)
+static __always_inline void identity_claim_update(struct xdp_md *ctx,
+						  struct ethhdr *eth,
+						  struct supplicant_id_key *id)
 {
-	struct supplicant_id_key id_key = {};
-	int id_len = 0;
-	__u16 vlan = 0;
-
-	struct radius_tlv_hdr *attr = (void *)(radius + 1);
-
-	for (int i = 0; i < RADIUS_MAX_ATTRS; i++) {
-		if (!range_within(attr, end, sizeof(*attr)))
-			break;
-
-		/* TLV len includes (type,len). Must be >= header. */
-		if (attr->len < sizeof(*attr))
-			break;
-
-		__u8 type = attr->type;
-		__u8 val_len = attr->len - (int)sizeof(*attr);
-		char *val = (void *)(attr + 1);
-
-		if (type == RADIUS_ATTR_USER_NAME) {
-			/* Bound length to ID_MAX-1 (+1 for '\0') */
-			id_len = val_len >= ID_MAX ? ID_MAX - 1 : val_len;
-			bpf_core_read_str(id_key.identity, id_len + 1, val);
-
-		} else if (type == RADIUS_ATTR_TUNNEL_PGID) {
-			if (!parse_vlan_ascii(val, end, &vlan))
-				break;
-		}
-
-		if (id_len && vlan)
-			break;
-
-		/* next attribute */
-		attr = (void *)((char *)attr + (int)sizeof(*attr) + val_len);
-	}
-
-	if (!id_len || !vlan)
-		return false;
-
-	*out_id = id_key;
-	*out_id_len = id_len;
-	*out_vlan = vlan;
-	return true;
-}
-
-/*
- * Consume identity_map[identity] and update auth_map[mac] with VLAN/state=AUTH.
- * - Verifies TTL
- * - Writes decision for userspace enforcer
- * - Deletes consumed identity entry
- */
-static __always_inline void radius_commit_accept(struct supplicant_id_key *id,
-						 __u16 vlan)
-{
-	struct supplicant_claim *claim = bpf_map_lookup_elem(&identity_map, id);
-	if (!claim)
-		return;
-
 	__u64 now = bpf_ktime_get_ns();
-	if (now - claim->claimed_at_ns > IDENTITY_TTL_NS) {
-		/* stale identity claim; ignore */
-		return;
+	__u64 threshold = 10ULL * 1000000000ULL;
+	struct supplicant_claim *old = bpf_map_lookup_elem(&identity_map, id);
+	if (old) {
+		if (now - old->claimed_at_ns < threshold)
+			return;
 	}
 
-	struct station_auth_decision decision = {};
-	decision.assigned_vlan = vlan;
-	decision.auth_state = 1;      /* Access-Accept */
-	decision.enforced_flag = 0;
-	decision.ingress_port_idx = claim->ingress_port_idx;
-	decision.last_update_ns = now;
+	struct supplicant_claim claim = {};
+	claim.ingress_port_idx = (__u32)ctx->ingress_ifindex;
+	claim.claimed_at_ns = now;
 
-	bpf_map_update_elem(&auth_map, claim->sta_mac, &decision, BPF_ANY);
+	/*copy MAC address*/
+	for (int i = 0; i < ETH_ALEN; i++) {
+		claim.sta_mac[i] = eth->h_source[i];
+	}
 
-	/* Identity is one-shot: remove after successful commit. */
-	bpf_map_delete_elem(&identity_map, id);
+	bpf_map_update_elem(&identity_map, id, &claim, BPF_ANY);
 }
 
 /* ------------------------------------------------------------------------- */
-/* XDP entrypoint                                                             */
+/* XDP entrypoint                                                            */
 /* ------------------------------------------------------------------------- */
 
 SEC("xdp")
@@ -210,34 +141,28 @@ int xdp_eap_parser(struct xdp_md *ctx)
 	void *data = (void *)(long)ctx->data;
 	void *end = (void *)(long)ctx->data_end;
 
-	/* 1) Only parse UDP packets */
-	struct udphdr *udp = extract_udp4(data, end);
-	if (!udp)
+	/* 1) Parse only EAPOL frames */
+	struct ethhdr *eth = eth_get_eapol(data, end);
+	if (!eth)
 		return XDP_PASS;
 
-	/* 2) We only care about RADIUS replies (source port 1812) */
-	if (udp->source != bpf_htons(RADIUS_UDP_PORT))
+	/* 2) Parse EAPOL header */
+	struct eapol_frame_hdr *eol = (void *)(eth + 1);
+	if (!range_within(eol, end, sizeof(*eol)))
 		return XDP_PASS;
 
-	/* 3) RADIUS header right after UDP */
-	struct radius_packet_hdr *radius = (void *)(udp + 1);
-	if (!range_within(radius, end, sizeof(*radius)))
+	/* 3) Logoff => revoke */
+	if (eol->type == EAPOL_PKT_LOGOFF) {
+		process_eapol_logoff(eth);		//setta auth_state=0 e aggiorna last_update_ns
 		return XDP_PASS;
+	}
 
-	/* 4) Only handle Access-Accept */
-	if (radius->code != RADIUS_CODE_ACCESS_ACCEPT)
-		return XDP_PASS;
-
-	/* 5) Extract (User-Name, VLAN) from TLVs */
+	/* 4) Identity Response => cache identity->(mac,ifindex) */
 	struct supplicant_id_key id = {};
-	int id_len = 0;
-	__u16 vlan = 0;
-
-	if (!radius_pull_uname_vlan(end, radius, &id, &id_len, &vlan))
+	if (!eap_extract_identity_response(end, eol, &id))
 		return XDP_PASS;
 
-	/* 6) Apply decision in auth_map for the MAC previously claiming identity */
-	radius_commit_accept(&id, vlan);
+	identity_claim_update(ctx, eth, &id);
 
 	return XDP_PASS;
 }
