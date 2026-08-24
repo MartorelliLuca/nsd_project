@@ -1,30 +1,21 @@
 #!/bin/sh
 set -eu
 
-add_ip() {
-  ipcidr="$1"
-  dev="$2"
-  if ip -br addr show dev "$dev" 2>/dev/null | grep -qF "$ipcidr"; then
-    :
-  else
-    ip addr add "$ipcidr" dev "$dev"
-  fi
-}
+# Enable interfaces
+ip link set eth0 up
+ip link set eth1 up
+ip link set eth2 up
+ip link set lo up
 
-bring_up() {
-  dev="$1"
-  ip link set "$dev" up 2>/dev/null || true
-}
+# Link R103 <-> R101
+ip addr replace 10.0.11.2/30 dev eth0
 
-# Link R103 <-> R101 (10.0.11.0/30)
-add_ip 10.0.11.2/30 eth0
+# Link R103 <-> R102
+ip addr replace 10.0.11.10/30 dev eth1
 
-# Link R103 <-> R102 (10.0.11.8/30)
-add_ip 10.0.11.10/30 eth1
+# Link R103 <-> CE3
+ip addr replace 10.1.2.1/30 dev eth2
 
-# Link R103 <-> CE3 (10.0.3.0/30)
-add_ip 10.1.2.1/30 eth2
+# Loopback / router-id R103
+ip addr replace 2.255.0.103/32 dev lo
 
-bring_up eth0
-bring_up eth1
-bring_up eth2

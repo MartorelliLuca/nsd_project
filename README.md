@@ -24,7 +24,7 @@ The most critical configuration steps for R101 are presented below. Since the ne
 
 init.sh just brings interfaces up and assigns the /30 links plus the loopback address.
 
-```
+```sh
 #!/bin/sh
 set -eu
 
@@ -103,6 +103,4 @@ router bgp 100
  exit-address-family
 !
 ```
-
-
 
