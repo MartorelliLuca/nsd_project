@@ -235,9 +235,9 @@ profile /usr/bin/ssh flags=(attach_disconnected) {
   network inet stream,
   network inet6 stream,
 
-  deny /etc/{shadow,shadow-,gshadow,gshadow-} r,
-  deny /etc/security/** r,
-  deny /etc/passwd w,
+  audit deny /etc/{shadow,shadow-,gshadow,gshadow-} r,
+  audit deny /etc/security/** r,
+  audit deny /etc/passwd w,
   
   deny owner @{HOME}/.ssh/.* rw,
   
@@ -1325,4 +1325,792 @@ The parser completes the correlation between the EAPOL authentication and the RA
 
 
 ##### `xdp_user.c`
+
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdint.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <bpf/bpf.h>
+
+#define MAX_VLAN_MAP 64
+#define MAX_IFACE_LEN 16
+
+#define LOG_ERROR 0
+#define LOG_WARN  1
+#define LOG_INFO  2
+#define LOG_DEBUG 3
+
+struct authentication {
+    uint16_t vlan_id;
+    uint8_t state;
+    uint8_t enforced;
+    uint32_t ifindex;
+    uint64_t last_seen_ns;
+} __attribute__((packed));
+
+struct vlan_mapping {
+    uint16_t vlan_id;
+    char iface[MAX_IFACE_LEN];
+};
+
+struct config {
+    char bridge[MAX_IFACE_LEN];
+    char gateway_iface[MAX_IFACE_LEN];
+    char map_path[256];
+    uint64_t interval_ms;
+    int log_level;
+
+    struct vlan_mapping vlan_map[MAX_VLAN_MAP];
+    int vlan_map_count;
+};
+
+static struct config cfg;
+
+#define log(level, fmt, ...)                                              \
+    do {                                                                  \
+        if (cfg.log_level >= (level)) {                                   \
+            time_t now = time(NULL);                                      \
+            char timestamp[32];                                           \
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S",  \
+                     localtime(&now));                                    \
+            fprintf(stderr, "[%s] " fmt "\n", timestamp, ##__VA_ARGS__); \
+        }                                                                 \
+    } while (0)
+
+static int execute(char *const args[])
+{
+    pid_t pid;
+    int status;
+
+    log(LOG_DEBUG, "exec: %s", args[0]);
+
+    pid = fork();
+    if (pid < 0) {
+        log(LOG_ERROR, "fork failed: %s", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        execvp(args[0], args);
+        fprintf(stderr, "cannot execute %s: %s\n", args[0], strerror(errno));
+        _exit(127);
+    }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        log(LOG_ERROR, "waitpid failed: %s", strerror(errno));
+        return -1;
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        log(LOG_ERROR, "command failed: %s", args[0]);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void mac_to_string(const uint8_t mac[6], char out[18])
+{
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static const char *interface_for_vlan(uint16_t vlan_id)
+{
+    for (int i = 0; i < cfg.vlan_map_count; i++) {
+        if (cfg.vlan_map[i].vlan_id == vlan_id)
+            return cfg.vlan_map[i].iface;
+    }
+
+    return NULL;
+}
+
+static int configure_bridge(void)
+{
+    char *args[] = {
+        "ip", "link", "set", "dev", cfg.bridge,
+        "type", "bridge", "vlan_filtering", "1", NULL
+    };
+
+    log(LOG_INFO, "enable VLAN filtering on bridge %s", cfg.bridge);
+    execute(args);
+    return 0;
+}
+
+static int add_vlan_to_ports(const char *client_iface, uint16_t vlan_id)
+{
+    char vlan[8];
+    snprintf(vlan, sizeof(vlan), "%u", vlan_id);
+
+    char *client_args[] = {
+        "bridge", "vlan", "add", "dev", (char *)client_iface,
+        "vid", vlan, "pvid", "untagged", NULL
+    };
+
+    char *trunk_args[] = {
+        "bridge", "vlan", "add", "dev", cfg.gateway_iface,
+        "vid", vlan, NULL
+    };
+
+    if (execute(client_args) != 0)
+        return -1;
+
+    return execute(trunk_args);
+}
+
+static void remove_vlan_from_trunk(uint16_t vlan_id)
+{
+    char vlan[8];
+    snprintf(vlan, sizeof(vlan), "%u", vlan_id);
+
+    char *args[] = {
+        "bridge", "vlan", "del", "dev", cfg.gateway_iface,
+        "vid", vlan, NULL
+    };
+
+    execute(args);
+}
+
+static int add_mac_rules(const uint8_t mac[6], const char *client_iface)
+{
+    char mac_text[18];
+    mac_to_string(mac, mac_text);
+
+    char *ingress_args[] = {
+        "ebtables", "-A", "FORWARD", "-i", (char *)client_iface,
+        "-s", mac_text, "-j", "ACCEPT", NULL
+    };
+
+    char *egress_args[] = {
+        "ebtables", "-A", "FORWARD", "-o", (char *)client_iface,
+        "-d", mac_text, "-j", "ACCEPT", NULL
+    };
+
+    if (execute(ingress_args) != 0)
+        return -1;
+
+    return execute(egress_args);
+}
+
+static void delete_mac_rules(const uint8_t mac[6], const char *client_iface)
+{
+    char mac_text[18];
+    mac_to_string(mac, mac_text);
+
+    char *ingress_args[] = {
+        "ebtables", "-D", "FORWARD", "-i", (char *)client_iface,
+        "-s", mac_text, "-j", "ACCEPT", NULL
+    };
+
+    char *egress_args[] = {
+        "ebtables", "-D", "FORWARD", "-o", (char *)client_iface,
+        "-d", mac_text, "-j", "ACCEPT", NULL
+    };
+
+    execute(ingress_args);
+    execute(egress_args);
+}
+
+static int apply_policy(const uint8_t mac[6],
+                        struct authentication *decision,
+                        const char *client_iface)
+{
+    char mac_text[18];
+    mac_to_string(mac, mac_text);
+
+    log(LOG_INFO, "ACCEPT %s: VLAN %u on %s",
+        mac_text, decision->vlan_id, client_iface);
+
+    if (add_vlan_to_ports(client_iface, decision->vlan_id) != 0)
+        return -1;
+
+    if (add_mac_rules(mac, client_iface) != 0)
+        return -1;
+
+    decision->enforced = 1;
+    return 0;
+}
+
+static void remove_policy(const uint8_t mac[6],
+                          const struct authentication *decision,
+                          const char *client_iface)
+{
+    char mac_text[18];
+    mac_to_string(mac, mac_text);
+
+    log(LOG_INFO, "REVOKE %s: VLAN %u on %s",
+        mac_text, decision->vlan_id, client_iface);
+
+    delete_mac_rules(mac, client_iface);
+    remove_vlan_from_trunk(decision->vlan_id);
+}
+
+static int parse_vlan_map(const char *text)
+{
+    char *copy = strdup(text);
+    char *entry;
+    char *saveptr = NULL;
+
+    if (copy == NULL)
+        return -1;
+
+    cfg.vlan_map_count = 0;
+    entry = strtok_r(copy, ",", &saveptr);
+
+    while (entry != NULL) {
+        char *separator = strchr(entry, ':');
+
+        if (separator == NULL || cfg.vlan_map_count >= MAX_VLAN_MAP) {
+            log(LOG_ERROR, "invalid VLAN map entry: %s", entry);
+            free(copy);
+            return -1;
+        }
+
+        *separator = '\0';
+
+        long vlan = strtol(entry, NULL, 10);
+        const char *iface = separator + 1;
+
+        if (vlan < 1 || vlan > 4094 ||
+            iface[0] == '\0' ||
+            strlen(iface) >= MAX_IFACE_LEN) {
+            log(LOG_ERROR, "invalid VLAN map entry: %s:%s", entry, iface);
+            free(copy);
+            return -1;
+        }
+
+        cfg.vlan_map[cfg.vlan_map_count].vlan_id = (uint16_t)vlan;
+        snprintf(cfg.vlan_map[cfg.vlan_map_count].iface,
+                 MAX_IFACE_LEN, "%s", iface);
+
+        cfg.vlan_map_count++;
+        entry = strtok_r(NULL, ",", &saveptr);
+    }
+
+    free(copy);
+    return cfg.vlan_map_count > 0 ? 0 : -1;
+}
+
+static void print_usage(const char *program)
+{
+    fprintf(stderr, "Usage: %s [options]\n", program);
+    fprintf(stderr, "  --bridge BRIDGE         default: br0\n");
+    fprintf(stderr, "  --gateway-iface IFACE   default: eth0\n");
+    fprintf(stderr, "  --vlan-map MAP          example: 32:eth1,95:eth2\n");
+    fprintf(stderr, "  --map-path PATH         default: /sys/fs/bpf/auth_map\n");
+    fprintf(stderr, "  --interval-ms MS        default: 200\n");
+    fprintf(stderr, "  --log-level LEVEL       error|warn|info|debug or 0-3\n");
+}
+
+static int read_options(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--bridge") == 0 && i + 1 < argc) {
+            snprintf(cfg.bridge, sizeof(cfg.bridge), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--gateway-iface") == 0 && i + 1 < argc) {
+            snprintf(cfg.gateway_iface, sizeof(cfg.gateway_iface), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--vlan-map") == 0 && i + 1 < argc) {
+            if (parse_vlan_map(argv[++i]) != 0)
+                return -1;
+        } else if (strcmp(argv[i], "--map-path") == 0 && i + 1 < argc) {
+            snprintf(cfg.map_path, sizeof(cfg.map_path), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) {
+            cfg.interval_ms = strtoull(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+            const char *level = argv[++i];
+
+            if (strcmp(level, "error") == 0) cfg.log_level = LOG_ERROR;
+            else if (strcmp(level, "warn") == 0) cfg.log_level = LOG_WARN;
+            else if (strcmp(level, "info") == 0) cfg.log_level = LOG_INFO;
+            else if (strcmp(level, "debug") == 0) cfg.log_level = LOG_DEBUG;
+            else cfg.log_level = atoi(level);
+        } else {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static void process_entry(int map_fd,
+                          const uint8_t mac[6],
+                          struct authentication *decision)
+{
+    const char *client_iface = interface_for_vlan(decision->vlan_id);
+    char mac_text[18];
+
+    mac_to_string(mac, mac_text);
+
+    if (client_iface == NULL) {
+        log(LOG_WARN, "no interface for VLAN %u (MAC %s)",
+            decision->vlan_id, mac_text);
+        return;
+    }
+
+    if (decision->state == 1 && decision->enforced == 0) {
+        if (apply_policy(mac, decision, client_iface) == 0) {
+            if (bpf_map_update_elem(map_fd, mac, decision, BPF_ANY) != 0) {
+                log(LOG_ERROR, "cannot update auth_map for %s: %s",
+                    mac_text, strerror(errno));
+            }
+        }
+        return;
+    }
+
+    if (decision->state == 0 && decision->enforced == 1) {
+        remove_policy(mac, decision, client_iface);
+
+        if (bpf_map_delete_elem(map_fd, mac) != 0) {
+            log(LOG_WARN, "cannot delete auth_map entry for %s: %s",
+                mac_text, strerror(errno));
+        }
+
+        return;
+    }
+
+    log(LOG_DEBUG, "no action for %s: state=%u enforced=%u VLAN=%u",
+        mac_text, decision->state, decision->enforced, decision->vlan_id);
+}
+
+static void process_auth_map(int map_fd)
+{
+    uint8_t current_key[6];
+    uint8_t next_key[6];
+    struct authentication decision;
+    int has_current_key = 0;
+
+    while (1) {
+        int result = bpf_map_get_next_key(
+            map_fd,
+            has_current_key ? current_key : NULL,
+            next_key
+        );
+
+        if (result != 0)
+            break;
+
+        memcpy(current_key, next_key, sizeof(current_key));
+        has_current_key = 1;
+
+        if (bpf_map_lookup_elem(map_fd, current_key, &decision) != 0) {
+            log(LOG_WARN, "cannot read an auth_map entry: %s", strerror(errno));
+            continue;
+        }
+
+        process_entry(map_fd, current_key, &decision);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    snprintf(cfg.bridge, sizeof(cfg.bridge), "%s", "br0");
+    snprintf(cfg.gateway_iface, sizeof(cfg.gateway_iface), "%s", "eth0");
+    snprintf(cfg.map_path, sizeof(cfg.map_path), "%s", "/sys/fs/bpf/auth_map");
+    cfg.interval_ms = 200;
+    cfg.log_level = LOG_INFO;
+
+    if (read_options(argc, argv) != 0 || cfg.vlan_map_count == 0) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    if (geteuid() != 0) {
+        log(LOG_ERROR, "this program must run as root");
+        return EXIT_FAILURE;
+    }
+
+    if (access(cfg.map_path, F_OK) != 0) {
+        log(LOG_ERROR, "pinned map not found: %s", cfg.map_path);
+        return EXIT_FAILURE;
+    }
+
+    configure_bridge();
+
+    int map_fd = bpf_obj_get(cfg.map_path);
+    if (map_fd < 0) {
+        log(LOG_ERROR, "cannot open pinned map %s: %s",
+            cfg.map_path, strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+    log(LOG_INFO, "started: bridge=%s trunk=%s map=%s poll=%lums",
+        cfg.bridge, cfg.gateway_iface, cfg.map_path, cfg.interval_ms);
+
+    while (1) {
+        process_auth_map(map_fd);
+        usleep(cfg.interval_ms * 1000);
+    }
+
+    close(map_fd);
+    return EXIT_SUCCESS;
+}
+```
+
+
+The userspace program actually enforces the authentication decisions generated by the XDP programs. It reads the `auth_map` pinned in `bpffs` using `bpf_obj_get()` and, at regular intervals, checks the entries to determine whether they should be applied or revoked.
+
+- **Reading the `auth_map`**
+  - Opens the BPF map specified by `--map-path`.
+  - Periodically scans all entries in the map.
+  - For each MAC, it reads the VLAN, authentication status, and enforcement status.
+
+- **Granting Access**
+  - When an entry has `state = 1` and `enforced = 0`, the authorization policy is applied.
+  - The program:
+    - associates the VLAN with the client port;
+    - enables the same VLAN on the gateway interface;
+    - adds `ebtables` rules to allow traffic from the authorized MAC.
+  - After successful application, it sets `enforced = 1` in the `auth_map`.
+
+- **Revoking Access**
+  - When an entry has `state = 0` and `enforced = 1`, the previously applied policy is removed.
+  - The program:
+    - deletes the `ebtables` rules associated with the MAC;
+    - removes the VLAN from the gateway interface;
+    - deletes the entry from the `auth_map`.
+  - This allows access to be revoked when, for example, an EAPOL Logoff is received.
+
+  The userspace program actually enforces the authentication decisions generated by the XDP programs. It reads the `auth_map` pinned in `bpffs` using `bpf_obj_get()` and, at regular intervals, checks the entries to determine whether they should be applied or revoked.
+
+- **Main Parameters**
+
+  - **`--bridge`**
+    - Specifies the bridge to use.
+
+  - **`--gateway-iface`**
+    - Specifies the gateway/trunk interface on which VLANs are configured.
+
+  - **`--vlan-map`**
+    - Defines the association between VLANs and client interfaces.
+
+  - **`--map-path`**
+    - Specifies the path to the pinned `auth_map`.
+
+  - **`--interval-ms`**
+    - Determines how often, in milliseconds, the program checks the `auth_map`.
+
+  - **`--log-level`**
+    - Controls the level of detail in the logs.
+    - Supports `error`, `warn`, `info`, `debug`, or values from `0` to `3`.
+
+The userspace process is therefore the point where the decision made by the XDP programs is transformed into an **actual network policy**:
+
+**`auth_map` → grant/revoke → VLAN + MAC rules → client access**.
+
+### Client-B1
+
+##### `init.sh`
+```
+#!/bin/sh
+
+ip addr add 192.168.32.2/24 dev eth0
+ip link set eth0 up
+ip route add default via 192.168.32.1
+```
+
+##### `supplicant.sh`
+```
+wpa_supplicant -B -D wired -i eth0 -c /root/wpa_supplicant.conf -C /run/wpa_supplicant
+```
+
+
+##### `wpa_supplicant.conf`
+```
+# /etc/wpa_supplicant.conf
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+ap_scan=0
+
+network={
+    key_mgmt=IEEE8021X
+    eap=MD5
+    identity="idclientb1"
+    password="pwclientb1"
+}
+```
+
+The wpa_supplicant.conf file stores the 802.1X authentication settings used by the client device. Through EAPOL, the supplicant provides its credentials to the switch, which acts as the authenticator and forwards the authentication request to the RADIUS server for verification.
+
+### Client-B2
+
+##### `init.sh`
+```
+#!/bin/sh
+
+ip addr add 192.168.95.2/24 dev eth0
+ip link set eth0 up
+ip route add default via 192.168.95.1
+```
+
+##### `supplicant.sh`
+```
+wpa_supplicant -B -D wired -i eth0 -c /root/wpa_supplicant.conf -C /run/wpa_supplicant
+```
+
+
+##### `wpa_supplicant.conf`
+```
+# /etc/wpa_supplicant.conf
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+ap_scan=0
+
+network={
+    key_mgmt=IEEE8021X
+    eap=MD5
+    identity="idclientb2"
+    password="pwclientb2"
+}
+```
+
+
+## VPN Site 3
+
+VPN Site 3 has one customer edge (**CE3**) and one Radius server, configured to serve Access Requests from Site 3 supplicants (**client-B1**, **client-B2**).
+
+### CE3
+
+###### `init.sh`
+
+```
+#!/bin/sh
+set -eu
+
+# WAN interface:
+ip link set eth0 up
+ip addr replace 10.1.3.2/30 dev eth0
+
+# Default route:
+ip route replace default via 10.1.3.1
+
+# LAN interface:
+ip link set eth1 up
+ip addr replace 192.168.3.1/24 dev eth1
+
+# IPv4 forwarding:
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+```
+
+
+###### `pki_gen.sh`
+```
+#!/bin/sh
+set -eu
+
+CA_CN="${CA_CN:-NSD_project}"
+EASYRSA_DIR="/usr/share/easy-rsa"
+OPENVPN_BASE="/root/openvpn"
+SERVER_NAME="CE3"
+CLIENTS="CE1 CE2"
+
+PKI_DIR="${EASYRSA_DIR}/pki"
+
+cd "${EASYRSA_DIR}"
+
+pki_complete() {
+  [ -d "${PKI_DIR}" ] \
+    && [ -f "${PKI_DIR}/ca.crt" ] \
+    && [ -f "${PKI_DIR}/issued/${SERVER_NAME}.crt" ] \
+    && [ -f "${PKI_DIR}/private/${SERVER_NAME}.key" ]
+}
+
+if pki_complete; then
+  echo "PKI already present, skipping generation"
+else
+  export EASYRSA_BATCH=1
+  export EASYRSA_REQ_CN="${CA_CN}"
+
+  ./easyrsa init-pki
+  ./easyrsa build-ca nopass
+  ./easyrsa build-server-full "${SERVER_NAME}" nopass
+
+  for c in ${CLIENTS}; do
+    ./easyrsa build-client-full "${c}" nopass
+  done
+
+  ./easyrsa gen-dh
+fi
+
+# Directory di destinazione
+mkdir -p \
+  "${OPENVPN_BASE}/keys" \
+  "${OPENVPN_BASE}/export/CE1" \
+  "${OPENVPN_BASE}/export/CE2"
+
+# Server (CE3)
+cp -f "${PKI_DIR}/ca.crt"              "${OPENVPN_BASE}/keys/ca.crt"
+cp -f "${PKI_DIR}/dh.pem"              "${OPENVPN_BASE}/keys/dh.pem"
+cp -f "${PKI_DIR}/issued/${SERVER_NAME}.crt"  "${OPENVPN_BASE}/keys/${SERVER_NAME}.crt"
+cp -f "${PKI_DIR}/private/${SERVER_NAME}.key" "${OPENVPN_BASE}/keys/${SERVER_NAME}.key"
+
+# Export client
+for c in ${CLIENTS}; do
+  mkdir -p "${OPENVPN_BASE}/export/${c}"
+  cp -f "${PKI_DIR}/ca.crt"             "${OPENVPN_BASE}/export/${c}/ca.crt"
+  cp -f "${PKI_DIR}/issued/${c}.crt"    "${OPENVPN_BASE}/export/${c}/${c}.crt"
+  cp -f "${PKI_DIR}/private/${c}.key"   "${OPENVPN_BASE}/export/${c}/${c}.key"
+done
+
+echo "PKI ready. Exports in ${OPENVPN_BASE}/export/"
+```
+
+This script controls the creation and management of the OpenVPN Public Key Infrastructure. It first checks whether the PKI and the certificates required for the CE3 server already exist, avoiding unnecessary regeneration when they are already available. If the PKI is missing, the script initializes Easy-RSA, creates the Certificate Authority named NSD_project, generates the certificate and private key for the OpenVPN server CE3, creates client certificates and private keys for CE1 and CE2, and generates the Diffie-Hellman parameters used by the server.
+
+Finally, it creates the required destination directories, copies the CA certificate, Diffie-Hellman parameters, server certificate, and server private key into the CE3 key directory, and exports the CA certificate together with the corresponding certificate and private key for each client, CE1 and CE2, into separate directories ready to be transferred to the respective VPN spokes.
+
+
+
+###### `server.conf`
+```
+port 1194
+proto udp
+dev tun
+
+ca   /root/openvpn/keys/ca.crt
+cert /root/openvpn/keys/CE3.crt
+key  /root/openvpn/keys/CE3.key
+dh   /root/openvpn/keys/dh.pem
+
+server 192.168.100.0 255.255.255.0
+
+push "route 192.168.1.0 255.255.255.0"    # Site 1
+push "route 192.168.2.0 255.255.255.0"    # Site 2
+push "route 192.168.32.0 255.255.255.0"   # VLAN 32
+push "route 192.168.95.0 255.255.255.0"   # VLAN 95
+push "route 192.168.3.0 255.255.255.0"    # Site 3
+
+client-to-client
+
+client-config-dir /root/openvpn/ccd
+
+route 192.168.1.0 255.255.255.0
+route 192.168.2.0 255.255.255.0
+route 192.168.32.0 255.255.255.0
+route 192.168.95.0 255.255.255.0
+
+keepalive 10 120
+persist-key
+persist-tun
+verb 3
+cipher AES-256-GCM
+```
+This section explains how the OpenVPN hub is configured. Known the configurations of both the spokes, CE1 and CE2, CE3 receives VPN connections from them, provides them with addresses from the VPN tunnel network, and distributes the appropriate routing information so that the LANs located behind each client can communicate through the tunnel.
+
+CE3 uses the `client-config-dir` directive to load a specific configuration for every connected VPN client:
+
+```conf
+client-config-dir /root/openvpn/ccd
+```
+
+When a client connects, OpenVPN reads the Common Name (CN) from its certificate and automatically loads the matching file from:
+
+```text
+/root/openvpn/ccd/<CN>
+```
+
+This mechanism allows CE3 to associate each remote LAN with the correct VPN spoke.
+
+The `route` directives configured in `server.conf` add the remote networks to CE3’s routing table. Instead, the `iroute` rules inside the CCD files tell OpenVPN which client tunnel must receive traffic for each network. Therefore, `route` makes CE3 aware of a remote subnet, while `iroute` associates that subnet with CE1 or CE2.
+
+**CE1**
+
+The file `/root/openvpn/ccd/CE1` contains:
+
+```conf
+iroute 192.168.1.0 255.255.255.0
+```
+
+This rule tells CE3 that the network `192.168.1.0/24` is located behind CE1, so traffic addressed to this subnet must be forwarded through the CE1 VPN tunnel.
+
+**CE2**
+
+The file `/root/openvpn/ccd/CE2` contains:
+
+```conf
+iroute 192.168.2.0 255.255.255.0
+iroute 192.168.32.0 255.255.255.0
+iroute 192.168.95.0 255.255.255.0
+```
+
+These rules associate the networks `192.168.2.0/24`, `192.168.32.0/24`, and `192.168.95.0/24` with CE2. As a result, CE3 forwards all traffic destined for these LANs through the VPN tunnel established with CE2.
+
+### RADIUS
+
+###### `init.sh`
+```
+#!/bin/sh
+set -eu
+
+# Network configuration
+ip addr add 192.168.3.2/24 dev eth0 2>/dev/null || true
+ip link set eth0 up
+ip route add default via 192.168.3.1 2>/dev/null || true
+
+# FreeRADIUS configuration
+RDIR="/etc/freeradius/3.0"
+SRC_DIR="/root/freeradius"
+
+mkdir -p "$RDIR/mods-config/files"
+
+cp "$SRC_DIR/clients.conf" "$RDIR/clients.conf"
+cp "$SRC_DIR/users.conf" "$RDIR/mods-config/files/authorize"
+cp "$SRC_DIR/users.conf" "$RDIR/users.conf"
+
+# Restart FreeRADIUS
+pkill -x freeradius 2>/dev/null || true
+pkill -x radiusd 2>/dev/null || true
+
+LOGFILE="/root/radius.log"
+
+if command -v freeradius >/dev/null 2>&1; then
+  nohup freeradius -f -l "$LOGFILE" >/dev/null 2>&1 &
+else
+  nohup radiusd -f -l "$LOGFILE" >/dev/null 2>&1 &
+fi
+
+sleep 1
+
+echo "RADIUS listening on UDP port 1812:"
+ss -lunp | grep ':1812' || echo "WARNING: nothing is listening yet"
+
+echo "Last FreeRADIUS log lines:"
+tail -n 30 "$LOGFILE" 2>/dev/null || true
+```
+
+###### `clients.conf`
+```
+client ebpf_switch {
+    ipaddr = 192.168.2.2
+    secret = donttellit
+    shortname = ebpf
+}
+```
+
+The `clients.conf` file defines the RADIUS clients that are authorized to send authentication requests to the FreeRADIUS server.
+The `ipaddr` field identifies the eBPF switch by its IP address. The `secret` field specifies the shared secret used to authenticate and protect communication between `hostapd` on the eBPF switch and the FreeRADIUS server. The `shortname` field provides a shorter, human-readable name that can be used in logs and diagnostic output. Only a device matching the configured IP address and shared secret is allowed to submit RADIUS Access-Request messages to the server.
+
+
+
+###### `users.conf`
+```
+idclientb1	Cleartext-Password := "pwclientb1"
+			Service-Type = Framed-User,
+			Tunnel-Type = 13,
+			Tunnel-Medium-Type = 6,
+			Tunnel-Private-Group-ID = 32
+		
+idclientb2	Cleartext-Password := "pwclientb2"
+			Service-Type = Framed-User,
+			Tunnel-Type = 13,
+			Tunnel-Medium-Type = 6,
+			Tunnel-Private-Group-ID = 95
+```
+
+The `users.conf` file defines the users accepted by FreeRADIUS, their authentication credentials, and the authorization attributes returned after successful authentication.
+
+`idclientb1` and `idclientb2` are the identities used by the two 802.1X clients. The `Cleartext-Password` attribute specifies the password that FreeRADIUS checks during authentication. If authentication succeeds, FreeRADIUS returns an `Access-Accept` response.
 
