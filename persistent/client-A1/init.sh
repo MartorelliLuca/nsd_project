@@ -1,19 +1,16 @@
 #!/bin/sh
 set -eu
 
-CLIENT_IP="192.168.1.2/24"
-IF_DEV="enp0s3"
-GW_IP="192.168.1.1"
-
+# Enable loopback and network interface
 ip link set lo up
-ip link set "$IF_DEV" up
+ip link set enp0s3 up
 
-# Evita IP duplicati o residui da configurazioni precedenti.
-ip addr flush dev "$IF_DEV" scope global
-ip addr add "$CLIENT_IP" dev "$IF_DEV"
+# Remove old IP addresses and configure client-A1 address
+ip addr flush dev enp0s3 scope global
+ip addr add 192.168.1.2/24 dev enp0s3
 
-# Rimuove la default route precedente e usa CE1 come gateway.
+# Use CE1 as default gateway
 ip route del default 2>/dev/null || true
-ip route replace default via "$GW_IP" dev "$IF_DEV"
+ip route replace default via 192.168.1.1 dev enp0s3
 
-echo "[client-A1] Configurato: $CLIENT_IP su $IF_DEV, gateway $GW_IP"
+echo "[client-A1] Network configured"
