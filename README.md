@@ -13,9 +13,9 @@
 For each node, run the local `deploy.sh` script to apply network settings (interfaces, routing, and services).
  
 
-### AS100 Border Router Configuration
+## AS100
 
-Given the three provider routers in AS100 (R101, R102, and R103), which operate as FRR routers configured via the **vtysh** configuration terminal, let us begin by detailing the setup for **R101**. While the specific steps below focus on R101, the same considerations and configuration logic apply analogously to the other border routers, R102 and R103.
+Given the three provider routers in AS100 (R101, R102, and R103), which operate as FRR routers configured via the **vtysh** configuration terminal, let us begin by detailing the setup for **R101**.
 
 ### R101
 The most critical configuration steps for R101 are presented below. Since the network topology and routing policies are consistent across the autonomous system, these procedures serve as the template for R102 and R103 as well.
@@ -39,7 +39,7 @@ ip addr add 10.0.11.1/30 dev eth0
 # Link R101 <-> R102 (10.0.11.4/30)
 ip addr add 10.0.11.5/30 dev eth1
 
-# Link R101 <-> CE1 (10.0.1.0/30)
+# Link R101 <-> CE1 (10.1.1.0/30)
 ip addr add 10.1.1.1/30 dev eth2
 
 ip addr add 2.255.0.101/32 dev lo
@@ -127,7 +127,7 @@ ip route add default via 10.1.1.1
 ip link set eth1 up
 ip addr add 192.168.1.1/24 dev eth1
 
-# Enable IPv4 forwarding
+# Enable IPv4 forwarding to  route traffic from the LAN through the OpenVPN tunnel
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 ```
 
@@ -181,7 +181,7 @@ ip route replace default via 192.168.1.1 dev enp0s3
 echo "[client-A1] Network configured"
 ```
 
-Since client-A1 is a sensitive device, it is protected by a Mandatory Access Control (MAC) mechanism; specifically, it is a Lubuntu virtual machine on which AppArmor is enabled and configured.
+Since client-A1 is a sensitive device, it is protected by a Mandatory Access Control (MAC) mechanism; specifically, it is a Lubuntu virtual machine on which AppArmor is configured.
 
 A specific profile was created for the `/usr/bin/ssh` binary, that is, the OpenSSH client used by the machine to administer or connect to remote hosts. I chose ssh because it is a realistic application that is relevant from a security perspective: it communicates over the network and uses local files that may contain sensitive information, such as SSH configurations, private keys, and data related to known hosts.
 
@@ -2091,7 +2091,7 @@ client ebpf_switch {
 ```
 
 The `clients.conf` file defines the RADIUS clients that are authorized to send authentication requests to the FreeRADIUS server.
-The `ipaddr` field identifies the eBPF switch by its IP address. The `secret` field specifies the shared secret used to authenticate and protect communication between `hostapd` on the eBPF switch and the FreeRADIUS server. The `shortname` field provides a shorter, human-readable name that can be used in logs and diagnostic output. Only a device matching the configured IP address and shared secret is allowed to submit RADIUS Access-Request messages to the server.
+The `ipaddr` field identifies the eBPF switch by its IP address. The `secret` field specifies the shared secret used to authenticate and protect communication between `hostapd` on the eBPF switch and the FreeRADIUS server. The `shortname` field provides a shorter, human-readable name that can be used in logs and diagnostic output. Only a device matching the configured IP address and shared secret is allowed to submit Access-Request messages.
 
 
 
